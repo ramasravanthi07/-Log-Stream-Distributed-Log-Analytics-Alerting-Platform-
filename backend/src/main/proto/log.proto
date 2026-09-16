@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package logstream;
+
+option java_multiple_files = true;
+option java_package = "com.logstream.proto";
+option java_outer_classname = "LogProto";
+
+// A single application log line emitted by a microservice.
+message LogMessage {
+  int64  timestamp     = 1;  // epoch millis
+  string level         = 2;  // DEBUG | INFO | WARN | ERROR | FATAL
+  string service       = 3;  // e.g. billing-api
+  string host          = 4;  // instance / pod name
+  string message       = 5;  // free text, full-text indexed
+  int64  response_time = 6;  // millis, 0 when not applicable
+  int32  status_code   = 7;  // HTTP status, 0 when not applicable
+  string trace_id      = 8;
+}
+
+// Batch wrapper for the unary high-throughput path.
+message LogBatch {
+  repeated LogMessage logs = 1;
+}
+
+message IngestSummary {
+  int64 accepted     = 1;
+  int64 rejected     = 2;
+  int64 elapsed_ms   = 3;
+  double logs_per_sec = 4;
+}
+
+message HealthRequest {}
+
+message HealthReply {
+  int64 indexed_docs = 1;
+  int64 queue_depth  = 2;
+  string status      = 3;
+}
+
+service LogIngestService {
+  // Client-streaming: one long-lived connection per microservice.
+  rpc Ingest(stream LogMessage) returns (IngestSummary);
+
+  // Unary batch: fewer round trips, used by the load generator.
+  rpc IngestBatch(LogBatch) returns (IngestSummary);
+
+  rpc Health(HealthRequest) returns (HealthReply);
+}

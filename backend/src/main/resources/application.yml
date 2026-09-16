@@ -1,0 +1,24 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: logstream
+  jackson:
+    default-property-inclusion: non_null
+
+logstream:
+  grpc:
+    port: 9090
+  index:
+    path: ./data/index
+    writer-threads: 4
+    queue-capacity: 200000
+    ram-buffer-mb: 512
+  alerts:
+    interval-ms: 60000
+
+logging:
+  level:
+    root: INFO
+    com.logstream: INFO
