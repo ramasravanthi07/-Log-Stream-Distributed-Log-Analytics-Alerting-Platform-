@@ -11,12 +11,7 @@ import {
   evaluateAlert,
 } from "./api";
 
-
 function App() {
-  /* =========================
-     STATE
-  ========================= */
-
   const [activePage, setActivePage] = useState("dashboard");
 
   const [query, setQuery] = useState(
@@ -24,43 +19,36 @@ function App() {
   );
 
   const [logs, setLogs] = useState([]);
-
   const [dashboardStats, setDashboardStats] = useState({});
-
   const [alerts, setAlerts] = useState([]);
 
   const [loading, setLoading] = useState(false);
-
   const [statsLoading, setStatsLoading] = useState(false);
-
   const [alertLoading, setAlertLoading] = useState(false);
 
   const [error, setError] = useState("");
-
   const [searchMessage, setSearchMessage] = useState("");
 
   const [queryValid, setQueryValid] = useState(null);
 
-  /* New alert form */
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const [alertForm, setAlertForm] = useState({
     name: "",
-    query: "level:ERROR AND service:billing-api",
-    threshold: 100,
+    query: "level:ERROR",
+    threshold: 10,
     window: 5,
     webhookUrl: "",
   });
 
-
-  /* =========================
-     HELPER FUNCTIONS
-  ========================= */
+  // =========================================================
+  // HELPERS
+  // =========================================================
 
   const getValue = (obj, keys, fallback = 0) => {
-    if (!obj || typeof obj !== "object") return fallback;
-
     for (const key of keys) {
       if (
+        obj &&
         obj[key] !== undefined &&
         obj[key] !== null
       ) {
@@ -71,84 +59,66 @@ function App() {
     return fallback;
   };
 
-
   const extractLogs = (data) => {
     if (Array.isArray(data)) {
       return data;
     }
 
-    if (!data || typeof data !== "object") {
-      return [];
-    }
-
-    if (Array.isArray(data.logs)) {
+    if (Array.isArray(data?.logs)) {
       return data.logs;
     }
 
-    if (Array.isArray(data.results)) {
+    if (Array.isArray(data?.results)) {
       return data.results;
     }
 
-    if (Array.isArray(data.hits)) {
+    if (Array.isArray(data?.hits)) {
       return data.hits;
-    }
-
-    if (
-      data.hits &&
-      Array.isArray(data.hits.hits)
-    ) {
-      return data.hits.hits.map((item) => {
-        return item._source || item;
-      });
     }
 
     return [];
   };
-
 
   const extractAlerts = (data) => {
     if (Array.isArray(data)) {
       return data;
     }
 
-    if (!data || typeof data !== "object") {
-      return [];
-    }
-
-    if (Array.isArray(data.alerts)) {
+    if (Array.isArray(data?.alerts)) {
       return data.alerts;
     }
 
-    if (Array.isArray(data.rules)) {
-      return data.rules;
-    }
-
-    if (Array.isArray(data.results)) {
+    if (Array.isArray(data?.results)) {
       return data.results;
     }
 
     return [];
   };
 
-
-  /* =========================
-     LOAD DASHBOARD
-  ========================= */
+  // =========================================================
+  // LOAD STATS
+  // =========================================================
 
   const loadStats = async () => {
     try {
       setStatsLoading(true);
+      setError("");
 
       const data = await stats();
 
       setDashboardStats(data || {});
+      setLastUpdated(new Date());
     } catch (err) {
-      console.error("Stats error:", err);
+      console.error(err);
+      setError("Unable to load dashboard statistics.");
     } finally {
       setStatsLoading(false);
     }
   };
 
+  // =========================================================
+  // LOAD ALERTS
+  // =========================================================
 
   const loadAlerts = async () => {
     try {
@@ -156,33 +126,30 @@ function App() {
 
       setAlerts(extractAlerts(data));
     } catch (err) {
-      console.error("Alerts error:", err);
+      console.error(err);
     }
   };
 
-
-  /* =========================
-     INITIAL LOAD
-  ========================= */
+  // =========================================================
+  // INITIAL LOAD
+  // =========================================================
 
   useEffect(() => {
     loadStats();
     loadAlerts();
   }, []);
 
+  // =========================================================
+  // SEARCH
+  // =========================================================
 
-  /* =========================
-     SEARCH
-  ========================= */
+  const runSearch = async (event) => {
+    if (event) {
+      event.preventDefault();
+    }
 
-  const runSearch = async (customQuery = null) => {
-    const finalQuery =
-      customQuery !== null
-        ? customQuery
-        : query;
-
-    if (!finalQuery.trim()) {
-      setError("Please enter a search query.");
+    if (!query.trim()) {
+      setSearchMessage("Please enter a query.");
       return;
     }
 
@@ -191,103 +158,97 @@ function App() {
       setError("");
       setSearchMessage("");
 
-      const result = await search({
-        q: finalQuery,
-        from: 0,
-        size: 50,
-        buckets: 60,
-      });
+      const start = performance.now();
 
-      const resultLogs = extractLogs(result);
+      const data = await search(query);
+
+      const end = performance.now();
+
+      const resultLogs = extractLogs(data);
 
       setLogs(resultLogs);
 
-      if (resultLogs.length === 0) {
-        setSearchMessage(
-          "No matching logs found."
-        );
-      } else {
-        setSearchMessage(
-          `${resultLogs.length} matching logs found.`
-        );
-      }
-
-    } catch (err) {
-      console.error("Search error:", err);
-
-      setError(
-        err.message ||
-        "Unable to search logs."
+      setSearchMessage(
+        `${resultLogs.length} logs found in ${Math.round(
+          end - start
+        )} ms`
       );
+    } catch (err) {
+      console.error(err);
 
       setLogs([]);
-
+      setError(
+        err?.message || "Search failed. Please check the backend."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-
-  /* =========================
-     QUERY VALIDATION
-  ========================= */
+  // =========================================================
+  // VALIDATE QUERY
+  // =========================================================
 
   const validateQuery = async () => {
-    if (!query.trim()) return;
+    if (!query.trim()) {
+      setQueryValid(false);
+      return;
+    }
 
     try {
       const result = await validate(query);
 
-      /*
-       * Backend may return:
-       * { valid: true }
-       * or another validation structure.
-       */
-
-      if (result && result.valid !== undefined) {
-        setQueryValid(result.valid);
-      } else {
+      if (
+        result === true ||
+        result?.valid === true ||
+        result?.isValid === true
+      ) {
         setQueryValid(true);
+      } else {
+        setQueryValid(false);
       }
-
     } catch (err) {
-      console.error(
-        "Validation error:",
-        err
-      );
-
+      console.error(err);
       setQueryValid(false);
     }
   };
 
+  // =========================================================
+  // USE QUERY
+  // =========================================================
 
-  /* =========================
-     SEARCH EXAMPLE
-  ========================= */
-
-  const useQuery = (newQuery) => {
-    setQuery(newQuery);
+  const useQuery = (value) => {
+    setQuery(value);
     setQueryValid(null);
+    setSearchMessage("");
     setError("");
-
-    runSearch(newQuery);
   };
 
+  // =========================================================
+  // ALERT FORM
+  // =========================================================
 
-  /* =========================
-     CREATE ALERT
-  ========================= */
+  const updateAlertForm = (field, value) => {
+    setAlertForm((previous) => ({
+      ...previous,
+      [field]: value,
+    }));
+  };
+
+  // =========================================================
+  // CREATE ALERT
+  // =========================================================
 
   const handleCreateAlert = async (event) => {
     event.preventDefault();
 
     if (!alertForm.name.trim()) {
-      setError("Please enter an alert name.");
+      setError("Alert name is required.");
       return;
     }
 
     if (!alertForm.query.trim()) {
-      setError("Please enter an alert query.");
+      setError("Alert query is required.");
       return;
     }
 
@@ -295,61 +256,39 @@ function App() {
       setAlertLoading(true);
       setError("");
 
-      const rule = {
+      await createAlert({
         name: alertForm.name,
         query: alertForm.query,
-        threshold: Number(
-          alertForm.threshold
-        ),
-        window: Number(
-          alertForm.window
-        ),
-      };
-
-      if (
-        alertForm.webhookUrl.trim()
-      ) {
-        rule.webhookUrl =
-          alertForm.webhookUrl;
-      }
-
-      await createAlert(rule);
+        threshold: Number(alertForm.threshold),
+        window: Number(alertForm.window),
+        webhookUrl: alertForm.webhookUrl,
+      });
 
       setAlertForm({
         name: "",
-        query:
-          "level:ERROR AND service:billing-api",
-        threshold: 100,
+        query: "level:ERROR",
+        threshold: 10,
         window: 5,
         webhookUrl: "",
       });
 
       await loadAlerts();
-
     } catch (err) {
-      console.error(
-        "Create alert error:",
-        err
-      );
+      console.error(err);
 
       setError(
-        err.message ||
-        "Unable to create alert."
+        err?.message || "Unable to create alert."
       );
-
     } finally {
       setAlertLoading(false);
     }
   };
 
-
-  /* =========================
-     DELETE ALERT
-  ========================= */
+  // =========================================================
+  // DELETE ALERT
+  // =========================================================
 
   const handleDeleteAlert = async (id) => {
-    if (!id) return;
-
     try {
       setAlertLoading(true);
       setError("");
@@ -357,31 +296,22 @@ function App() {
       await deleteAlert(id);
 
       await loadAlerts();
-
     } catch (err) {
-      console.error(
-        "Delete alert error:",
-        err
-      );
+      console.error(err);
 
       setError(
-        err.message ||
-        "Unable to delete alert."
+        err?.message || "Unable to delete alert."
       );
-
     } finally {
       setAlertLoading(false);
     }
   };
 
-
-  /* =========================
-     EVALUATE ALERT
-  ========================= */
+  // =========================================================
+  // EVALUATE ALERT
+  // =========================================================
 
   const handleEvaluateAlert = async (id) => {
-    if (!id) return;
-
     try {
       setAlertLoading(true);
       setError("");
@@ -389,173 +319,1103 @@ function App() {
       await evaluateAlert(id);
 
       await loadAlerts();
-      await loadStats();
-
     } catch (err) {
-      console.error(
-        "Evaluate alert error:",
-        err
-      );
+      console.error(err);
 
       setError(
-        err.message ||
-        "Unable to evaluate alert."
+        err?.message || "Unable to evaluate alert."
       );
-
     } finally {
       setAlertLoading(false);
     }
   };
 
-
-  /* =========================
-     FORMAT LOG
-  ========================= */
+  // =========================================================
+  // FORMAT LOG
+  // =========================================================
 
   const formatLog = (log) => {
-    if (!log) {
-      return {
-        time: "-",
-        level: "INFO",
-        service: "-",
-        message: "-",
-        response: "-",
-      };
-    }
-
-    const source =
-      log._source || log;
-
     return {
-      time: getValue(
-        source,
-        [
-          "timestamp",
-          "time",
-          "@timestamp",
-          "created_at",
-        ],
+      timestamp: getValue(
+        log,
+        ["timestamp", "time", "@timestamp"],
         "-"
       ),
 
-      level: String(
-        getValue(
-          source,
-          ["level", "severity"],
-          "INFO"
-        )
-      ).toUpperCase(),
+      level: getValue(
+        log,
+        ["level", "logLevel"],
+        "INFO"
+      ),
 
       service: getValue(
-        source,
-        [
-          "service",
-          "service_name",
-          "serviceName",
-        ],
+        log,
+        ["service", "serviceName"],
         "-"
       ),
 
       message: getValue(
-        source,
-        [
-          "message",
-          "msg",
-          "log",
-        ],
+        log,
+        ["message", "msg"],
         "-"
       ),
 
-      response: getValue(
-        source,
-        [
-          "response_time",
-          "responseTime",
-          "latency",
-        ],
+      host: getValue(
+        log,
+        ["host", "hostname"],
         "-"
       ),
     };
   };
 
-
-  /* =========================
-     STAT VALUES
-  ========================= */
+  // =========================================================
+  // STAT VALUES
+  // =========================================================
 
   const totalLogs = getValue(
     dashboardStats,
-    [
-      "total",
-      "totalLogs",
-      "total_logs",
-      "count",
-      "indexed",
-      "lines",
-    ],
+    ["totalLogs", "total", "count", "logCount"],
     0
   );
 
   const errorCount = getValue(
     dashboardStats,
-    [
-      "errors",
-      "errorCount",
-      "error_count",
-    ],
+    ["errorCount", "errors", "errorLogs"],
     0
   );
 
   const warningCount = getValue(
     dashboardStats,
-    [
-      "warnings",
-      "warningCount",
-      "warning_count",
-      "warn",
-    ],
+    ["warningCount", "warnings", "warningLogs"],
     0
   );
 
   const ingestionRate = getValue(
     dashboardStats,
-    [
-      "ingestionRate",
-      "ingestion_rate",
-      "logsPerSecond",
-      "logs_per_second",
-      "throughput",
-    ],
+    ["ingestionRate", "logsPerSecond", "rate"],
     0
   );
 
   const averageResponse = getValue(
     dashboardStats,
     [
-      "avgResponse",
-      "avg_response",
+      "averageResponse",
       "averageResponseTime",
-      "average_response_time",
+      "avgResponseTime",
     ],
     0
   );
 
+  // =========================================================
+  // SAMPLE CHART DATA
+  // =========================================================
 
-  /* =========================
-     RENDER
-  ========================= */
+  const chartValues = [
+    32,
+    45,
+    38,
+    58,
+    44,
+    66,
+    51,
+    72,
+    61,
+    80,
+    63,
+    91,
+    75,
+    68,
+    84,
+    73,
+    88,
+    69,
+    95,
+    78,
+  ];
+
+  // =========================================================
+  // NAVIGATION
+  // =========================================================
+
+  const navigation = [
+    {
+      id: "dashboard",
+      icon: "▦",
+      label: "Dashboard",
+    },
+    {
+      id: "search",
+      icon: "⌕",
+      label: "Log Search",
+    },
+    {
+      id: "alerts",
+      icon: "◈",
+      label: "Alerts",
+    },
+    {
+      id: "services",
+      icon: "◇",
+      label: "Services",
+    },
+    {
+      id: "analytics",
+      icon: "◒",
+      label: "Analytics",
+    },
+  ];
+
+  // =========================================================
+  // DASHBOARD
+  // =========================================================
+
+  const renderDashboard = () => (
+    <>
+      <section className="hero">
+        <div>
+          <div className="eyebrow">
+            DISTRIBUTED LOG OBSERVABILITY
+          </div>
+
+          <h1>
+            LOG<span>STREAM</span>
+          </h1>
+
+          <p className="hero-description">
+            A distributed log analytics and alerting platform
+            built for high-volume application observability,
+            fast search, indexing, and real-time monitoring.
+          </p>
+
+          {lastUpdated && (
+            <p className="last-updated">
+              Last updated:{" "}
+              {lastUpdated.toLocaleTimeString()}
+            </p>
+          )}
+        </div>
+
+        <div className="hero-metric">
+          <span>INGESTION RATE</span>
+
+          <strong>
+            {Number(ingestionRate).toLocaleString()}
+          </strong>
+
+          <small>LOGS / SECOND</small>
+        </div>
+      </section>
+
+      <section className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-top">
+            <span>TOTAL LOGS</span>
+            <span className="stat-icon">◉</span>
+          </div>
+
+          <strong>
+            {statsLoading
+              ? "..."
+              : Number(totalLogs).toLocaleString()}
+          </strong>
+
+          <small>INDEXED LOG RECORDS</small>
+        </div>
+
+        <div className="stat-card error-card">
+          <div className="stat-top">
+            <span>ERRORS</span>
+            <span className="stat-icon">!</span>
+          </div>
+
+          <strong>
+            {statsLoading
+              ? "..."
+              : Number(errorCount).toLocaleString()}
+          </strong>
+
+          <small>ERROR LOG ENTRIES</small>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-top">
+            <span>WARNINGS</span>
+            <span className="stat-icon">△</span>
+          </div>
+
+          <strong>
+            {statsLoading
+              ? "..."
+              : Number(warningCount).toLocaleString()}
+          </strong>
+
+          <small>WARNING LOG ENTRIES</small>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-top">
+            <span>AVG RESPONSE</span>
+            <span className="stat-icon">◷</span>
+          </div>
+
+          <strong>
+            {statsLoading
+              ? "..."
+              : `${averageResponse} ms`}
+          </strong>
+
+          <small>AVERAGE RESPONSE TIME</small>
+        </div>
+      </section>
+
+      <section className="dashboard-grid">
+        <div className="panel large-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-label">
+                INGESTION
+              </div>
+
+              <h2>Log Volume</h2>
+            </div>
+
+            <select defaultValue="24h">
+              <option value="1h">1 HOUR</option>
+              <option value="6h">6 HOURS</option>
+              <option value="24h">24 HOURS</option>
+              <option value="7d">7 DAYS</option>
+            </select>
+          </div>
+
+          <div className="chart">
+            <div className="chart-grid">
+              <span>100</span>
+              <span>75</span>
+              <span>50</span>
+              <span>25</span>
+              <span>0</span>
+            </div>
+
+            <div className="bars">
+              {chartValues.map((value, index) => (
+                <div
+                  key={index}
+                  className="bar"
+                  style={{
+                    height: `${value}%`,
+                  }}
+                  title={`${value} units`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-label">
+                SERVICES
+              </div>
+
+              <h2>System Status</h2>
+            </div>
+          </div>
+
+          <div className="service-list">
+            <div className="service">
+              <div>
+                <strong>billing-api</strong>
+              </div>
+
+              <span className="positive">
+                ● ONLINE
+              </span>
+            </div>
+
+            <div className="service">
+              <div>
+                <strong>auth-service</strong>
+              </div>
+
+              <span className="positive">
+                ● ONLINE
+              </span>
+            </div>
+
+            <div className="service">
+              <div>
+                <strong>payment-service</strong>
+              </div>
+
+              <span className="positive">
+                ● ONLINE
+              </span>
+            </div>
+
+            <div className="service">
+              <div>
+                <strong>notification-service</strong>
+              </div>
+
+              <span className="positive">
+                ● ONLINE
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <div className="panel-label">
+              RECENT ACTIVITY
+            </div>
+
+            <h2>Latest Logs</h2>
+          </div>
+
+          <button
+            className="secondary-button"
+            onClick={() => setActivePage("search")}
+          >
+            VIEW ALL
+          </button>
+        </div>
+
+        <div className="logs-table-wrapper">
+          <table className="logs-table">
+            <thead>
+              <tr>
+                <th>TIME</th>
+                <th>LEVEL</th>
+                <th>SERVICE</th>
+                <th>HOST</th>
+                <th>MESSAGE</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {logs.length > 0 ? (
+                logs.slice(0, 8).map((log, index) => {
+                  const item = formatLog(log);
+
+                  return (
+                    <tr key={index}>
+                      <td>{item.timestamp}</td>
+
+                      <td>
+                        <span
+                          className={
+                            item.level === "ERROR"
+                              ? "log-level error"
+                              : item.level === "WARN"
+                              ? "log-level warning"
+                              : "log-level"
+                          }
+                        >
+                          {item.level}
+                        </span>
+                      </td>
+
+                      <td>{item.service}</td>
+
+                      <td>{item.host}</td>
+
+                      <td>{item.message}</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td
+                    colSpan="5"
+                    className="empty-state"
+                  >
+                    No logs loaded. Run a search to view
+                    log records.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+
+  // =========================================================
+  // SEARCH PAGE
+  // =========================================================
+
+  const renderSearch = () => (
+    <>
+      <section className="page-heading">
+        <div className="eyebrow">
+          QUERY ENGINE
+        </div>
+
+        <h1 className="page-title">
+          LOG SEARCH
+        </h1>
+      </section>
+
+      <section className="search-section">
+        <div className="search-label">
+          <span>⌕</span>
+          QUERY
+        </div>
+
+        <form
+          className="search-box"
+          onSubmit={runSearch}
+        >
+          <input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setQueryValid(null);
+              setSearchMessage("");
+            }}
+            placeholder="Enter a log query..."
+          />
+
+          <button
+            type="submit"
+            disabled={loading}
+          >
+            {loading ? "SEARCHING..." : "SEARCH"}
+          </button>
+        </form>
+
+        <div className="query-examples">
+          <span>EXAMPLES:</span>
+
+          <button
+            type="button"
+            onClick={() =>
+              useQuery("level:ERROR")
+            }
+          >
+            level:ERROR
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              useQuery("service:billing-api")
+            }
+          >
+            service:billing-api
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              useQuery(
+                "level:ERROR AND service:billing-api"
+              )
+            }
+          >
+            level:ERROR AND service:billing-api
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              useQuery("status:500")
+            }
+          >
+            status:500
+          </button>
+        </div>
+
+        <div className="query-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={validateQuery}
+          >
+            VALIDATE QUERY
+          </button>
+
+          {queryValid === true && (
+            <span className="query-valid">
+              ✓ QUERY VALID
+            </span>
+          )}
+
+          {queryValid === false && (
+            <span className="query-invalid">
+              ✕ QUERY INVALID
+            </span>
+          )}
+        </div>
+
+        {error && (
+          <div className="error-message">
+            {error}
+          </div>
+        )}
+
+        {searchMessage && (
+          <div className="search-result-message">
+            {searchMessage}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <div className="panel-label">
+              SEARCH RESULTS
+            </div>
+
+            <h2>
+              {logs.length} Log Records
+            </h2>
+          </div>
+        </div>
+
+        <div className="logs-table-wrapper">
+          <table className="logs-table">
+            <thead>
+              <tr>
+                <th>TIME</th>
+                <th>LEVEL</th>
+                <th>SERVICE</th>
+                <th>HOST</th>
+                <th>MESSAGE</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {logs.length > 0 ? (
+                logs.map((log, index) => {
+                  const item = formatLog(log);
+
+                  return (
+                    <tr key={index}>
+                      <td>{item.timestamp}</td>
+
+                      <td>
+                        <span
+                          className={
+                            item.level === "ERROR"
+                              ? "log-level error"
+                              : item.level === "WARN"
+                              ? "log-level warning"
+                              : "log-level"
+                          }
+                        >
+                          {item.level}
+                        </span>
+                      </td>
+
+                      <td>{item.service}</td>
+
+                      <td>{item.host}</td>
+
+                      <td>{item.message}</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td
+                    colSpan="5"
+                    className="empty-state"
+                  >
+                    No search results.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+
+  // =========================================================
+  // ALERTS PAGE
+  // =========================================================
+
+  const renderAlerts = () => (
+    <>
+      <section className="page-heading">
+        <div className="eyebrow">
+          REAL-TIME MONITORING
+        </div>
+
+        <h1 className="page-title">
+          ALERTS
+        </h1>
+      </section>
+
+      {error && (
+        <div className="error-message">
+          {error}
+        </div>
+      )}
+
+      <section className="alerts-layout">
+        <div className="panel">
+          <div className="panel-label">
+            CREATE ALERT
+          </div>
+
+          <h2>New Alert Rule</h2>
+
+          <form
+            className="alert-form"
+            onSubmit={handleCreateAlert}
+          >
+            <label>
+              NAME
+
+              <input
+                value={alertForm.name}
+                onChange={(event) =>
+                  updateAlertForm(
+                    "name",
+                    event.target.value
+                  )
+                }
+                placeholder="High Error Rate"
+              />
+            </label>
+
+            <label>
+              QUERY
+
+              <input
+                value={alertForm.query}
+                onChange={(event) =>
+                  updateAlertForm(
+                    "query",
+                    event.target.value
+                  )
+                }
+                placeholder="level:ERROR"
+              />
+            </label>
+
+            <div className="form-row">
+              <label>
+                THRESHOLD
+
+                <input
+                  type="number"
+                  min="1"
+                  value={alertForm.threshold}
+                  onChange={(event) =>
+                    updateAlertForm(
+                      "threshold",
+                      event.target.value
+                    )
+                  }
+                />
+              </label>
+
+              <label>
+                WINDOW (MIN)
+
+                <input
+                  type="number"
+                  min="1"
+                  value={alertForm.window}
+                  onChange={(event) =>
+                    updateAlertForm(
+                      "window",
+                      event.target.value
+                    )
+                  }
+                />
+              </label>
+            </div>
+
+            <label>
+              WEBHOOK URL
+
+              <input
+                value={alertForm.webhookUrl}
+                onChange={(event) =>
+                  updateAlertForm(
+                    "webhookUrl",
+                    event.target.value
+                  )
+                }
+                placeholder="https://hooks.slack.com/..."
+              />
+            </label>
+
+            <button
+              className="create-button"
+              type="submit"
+              disabled={alertLoading}
+            >
+              {alertLoading
+                ? "CREATING..."
+                : "CREATE ALERT"}
+            </button>
+          </form>
+        </div>
+
+        <div className="panel">
+          <div className="panel-label">
+            ACTIVE RULES
+          </div>
+
+          <h2>
+            {alerts.length} Alerts
+          </h2>
+
+          <div className="alert-list">
+            {alerts.length > 0 ? (
+              alerts.map((alert, index) => {
+                const id =
+                  alert.id ??
+                  alert.alertId ??
+                  index;
+
+                return (
+                  <div
+                    className="alert-item"
+                    key={id}
+                  >
+                    <div className="alert-item-top">
+                      <div>
+                        <strong>
+                          {alert.name ||
+                            "Unnamed Alert"}
+                        </strong>
+
+                        <span>
+                          {alert.query ||
+                            "No query"}
+                        </span>
+                      </div>
+
+                      <span className="alert-status">
+                        ● ACTIVE
+                      </span>
+                    </div>
+
+                    <div className="alert-details">
+                      <span>
+                        Threshold:{" "}
+                        {alert.threshold ?? "-"}
+                      </span>
+
+                      <span>
+                        Window:{" "}
+                        {alert.window ?? "-"} min
+                      </span>
+                    </div>
+
+                    <div className="alert-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() =>
+                          handleEvaluateAlert(id)
+                        }
+                        disabled={alertLoading}
+                      >
+                        EVALUATE
+                      </button>
+
+                      <button
+                        className="delete-button"
+                        onClick={() =>
+                          handleDeleteAlert(id)
+                        }
+                        disabled={alertLoading}
+                      >
+                        DELETE
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="empty-state">
+                No alerts configured.
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  // =========================================================
+  // SERVICES PAGE
+  // =========================================================
+
+  const renderServices = () => {
+    const services = [
+      {
+        name: "billing-api",
+        port: "8081",
+        status: "ONLINE",
+        description:
+          "Billing and transaction processing service",
+      },
+      {
+        name: "auth-service",
+        port: "8082",
+        status: "ONLINE",
+        description:
+          "Authentication and authorization service",
+      },
+      {
+        name: "payment-service",
+        port: "8083",
+        status: "ONLINE",
+        description:
+          "Payment processing service",
+      },
+      {
+        name: "notification-service",
+        port: "8084",
+        status: "ONLINE",
+        description:
+          "Notification and messaging service",
+      },
+    ];
+
+    return (
+      <>
+        <section className="page-heading">
+          <div className="eyebrow">
+            SYSTEM COMPONENTS
+          </div>
+
+          <h1 className="page-title">
+            SERVICES
+          </h1>
+        </section>
+
+        <section className="service-grid">
+          {services.map((service) => (
+            <div
+              className="panel service-card"
+              key={service.name}
+            >
+              <div className="service-card-header">
+                <div>
+                  <div className="panel-label">
+                    SERVICE
+                  </div>
+
+                  <h2>{service.name}</h2>
+                </div>
+
+                <span className="positive">
+                  ● {service.status}
+                </span>
+              </div>
+
+              <p>
+                {service.description}
+              </p>
+
+              <div className="service-meta">
+                <span>
+                  PORT: {service.port}
+                </span>
+
+                <span>
+                  HEALTH: OK
+                </span>
+              </div>
+            </div>
+          ))}
+        </section>
+      </>
+    );
+  };
+
+  // =========================================================
+  // ANALYTICS PAGE
+  // =========================================================
+
+  const renderAnalytics = () => {
+    const errorRate =
+      totalLogs > 0
+        ? ((Number(errorCount) / Number(totalLogs)) *
+            100
+          ).toFixed(2)
+        : "0.00";
+
+    const warningRate =
+      totalLogs > 0
+        ? ((Number(warningCount) /
+            Number(totalLogs)) *
+            100
+          ).toFixed(2)
+        : "0.00";
+
+    return (
+      <>
+        <section className="page-heading">
+          <div className="eyebrow">
+            OBSERVABILITY METRICS
+          </div>
+
+          <h1 className="page-title">
+            ANALYTICS
+          </h1>
+        </section>
+
+        <section className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-top">
+              <span>ERROR RATE</span>
+              <span className="stat-icon">%</span>
+            </div>
+
+            <strong>{errorRate}%</strong>
+
+            <small>
+              OF TOTAL LOGS
+            </small>
+          </div>
+
+          <div className="stat-card">
+            <div className="stat-top">
+              <span>WARNING RATE</span>
+              <span className="stat-icon">%</span>
+            </div>
+
+            <strong>{warningRate}%</strong>
+
+            <small>
+              OF TOTAL LOGS
+            </small>
+          </div>
+
+          <div className="stat-card">
+            <div className="stat-top">
+              <span>INGESTION</span>
+              <span className="stat-icon">↗</span>
+            </div>
+
+            <strong>
+              {Number(
+                ingestionRate
+              ).toLocaleString()}
+            </strong>
+
+            <small>
+              LOGS / SECOND
+            </small>
+          </div>
+
+          <div className="stat-card">
+            <div className="stat-top">
+              <span>RESPONSE</span>
+              <span className="stat-icon">◷</span>
+            </div>
+
+            <strong>
+              {averageResponse} ms
+            </strong>
+
+            <small>
+              AVERAGE LATENCY
+            </small>
+          </div>
+        </section>
+
+        <section className="dashboard-grid">
+          <div className="panel">
+            <div className="panel-header">
+              <div>
+                <div className="panel-label">
+                  LOG DISTRIBUTION
+                </div>
+
+                <h2>
+                  Error Monitoring
+                </h2>
+              </div>
+            </div>
+
+            <div className="analytics-alert">
+              <strong>
+                {errorCount}
+              </strong>
+
+              <span>
+                TOTAL ERROR LOGS
+              </span>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <div>
+                <div className="panel-label">
+                  WARNING MONITORING
+                </div>
+
+                <h2>
+                  Warning Activity
+                </h2>
+              </div>
+            </div>
+
+            <div className="analytics-alert">
+              <strong>
+                {warningCount}
+              </strong>
+
+              <span>
+                TOTAL WARNING LOGS
+              </span>
+            </div>
+          </div>
+        </section>
+      </>
+    );
+  };
+
+  // =========================================================
+  // PAGE RENDERER
+  // =========================================================
+
+  const renderPage = () => {
+    switch (activePage) {
+      case "search":
+        return renderSearch();
+
+      case "alerts":
+        return renderAlerts();
+
+      case "services":
+        return renderServices();
+
+      case "analytics":
+        return renderAnalytics();
+
+      case "dashboard":
+      default:
+        return renderDashboard();
+    }
+  };
+
+  // =========================================================
+  // MAIN RETURN
+  // =========================================================
 
   return (
     <div className="app">
-
-      {/* =====================================================
-          SIDEBAR
-      ===================================================== */}
-
       <aside className="sidebar">
-
         <div className="brand">
-
           <div className="brand-icon">
             L
           </div>
@@ -567,154 +1427,41 @@ function App() {
               OBSERVABILITY PLATFORM
             </span>
           </div>
-
         </div>
-
 
         <nav className="navigation">
+          {navigation.map((item) => (
+            <button
+              key={item.id}
+              className={`nav-item ${
+                activePage === item.id
+                  ? "active"
+                  : ""
+              }`}
+              onClick={() =>
+                setActivePage(item.id)
+              }
+            >
+              <span>{item.icon}</span>
 
-          <button
-            className={
-              activePage === "dashboard"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              setActivePage("dashboard")
-            }
-          >
-            <span>▦</span>
-            Dashboard
-          </button>
-
-
-          <button
-            className={
-              activePage === "search"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              setActivePage("search")
-            }
-          >
-            <span>⌕</span>
-            Log Search
-          </button>
-
-
-          <button
-            className={
-              activePage === "alerts"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              setActivePage("alerts")
-            }
-          >
-            <span>♢</span>
-            Alerts
-          </button>
-
-
-          <button
-            className={
-              activePage === "services"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              setActivePage("services")
-            }
-          >
-            <span>◈</span>
-            Services
-          </button>
-
-
-          <button
-            className={
-              activePage === "analytics"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              setActivePage("analytics")
-            }
-          >
-            <span>◌</span>
-            Analytics
-          </button>
-
+              {item.label}
+            </button>
+          ))}
         </nav>
-
-
-        <div className="sidebar-bottom">
-
-          <div className="system-status">
-
-            <span className="status-dot"></span>
-
-            <div>
-
-              <strong>
-                System Operational
-              </strong>
-
-              <small>
-                Backend connected
-              </small>
-
-            </div>
-
-          </div>
-
-
-          <div className="version">
-            LOGSTREAM v1.0
-          </div>
-
-        </div>
-
       </aside>
 
-
-      {/* =====================================================
-          MAIN
-      ===================================================== */}
-
       <main className="main">
-
-        {/* TOP BAR */}
-
         <header className="topbar">
-
-          <div>
-
-            <span className="breadcrumb">
-              OBSERVABILITY /
-            </span>
-
-            <strong>
-              {" "}
-              {activePage.toUpperCase()}
-            </strong>
-
+          <div className="breadcrumb">
+            LOGSTREAM
+            <span>/</span>
+            {navigation.find(
+              (item) =>
+                item.id === activePage
+            )?.label || "Dashboard"}
           </div>
 
-
-          <div className="top-actions">
-
-            <span className="live-indicator">
-
-              <span></span>
-
-              LIVE
-
-            </span>
-
-
+          <div className="topbar-right">
             <button
               className="icon-button"
               onClick={() => {
@@ -726,1491 +1473,34 @@ function App() {
               ↻
             </button>
 
-
             <div className="profile">
-
               <div className="avatar">
-                D
+                L
               </div>
 
               <span>
-                DevOps Engineer
+                LOGSTREAM ADMIN
               </span>
-
             </div>
-
           </div>
-
         </header>
 
-
-        {/* =====================================================
-            DASHBOARD
-        ===================================================== */}
-
-        {activePage === "dashboard" && (
-
-          <section className="content">
-
-            {/* HERO */}
-
-            <div className="hero">
-
-              <div>
-
-                <p className="eyebrow">
-                  REAL-TIME LOG INTELLIGENCE
-                </p>
-
-                <h1>
-                  SEE EVERYTHING.
-                  <br />
-
-                  <span>
-                    MISS NOTHING.
-                  </span>
-                </h1>
-
-                <p className="hero-description">
-                  Search, analyze and monitor
-                  millions of application logs
-                  in real time with LogStream.
-                </p>
-
-              </div>
-
-
-              <div className="hero-metric">
-
-                <span>
-                  INGESTION RATE
-                </span>
-
-                <strong>
-                  {statsLoading
-                    ? "..."
-                    : Number(
-                        ingestionRate || 0
-                      ).toLocaleString()}
-                </strong>
-
-                <small>
-                  logs / second
-                </small>
-
-              </div>
-
-            </div>
-
-
-            {/* SEARCH */}
-
-            <div className="search-section">
-
-              <div className="search-label">
-
-                <span>⌕</span>
-
-                QUERY LOGS
-
-              </div>
-
-
-              <div className="search-box">
-
-                <input
-                  value={query}
-                  onChange={(e) => {
-                    setQuery(
-                      e.target.value
-                    );
-
-                    setQueryValid(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (
-                      e.key === "Enter"
-                    ) {
-                      runSearch();
-                    }
-                  }}
-                  placeholder="level:ERROR AND service:billing-api AND response_time > 1000"
-                />
-
-
-                <button
-                  onClick={() =>
-                    runSearch()
-                  }
-                  disabled={loading}
-                >
-                  {loading
-                    ? "SEARCHING..."
-                    : "SEARCH"}
-                </button>
-
-              </div>
-
-
-              <div className="query-examples">
-
-                <span>
-                  Try:
-                </span>
-
-
-                <button
-                  onClick={() =>
-                    useQuery(
-                      "level:ERROR"
-                    )
-                  }
-                >
-                  level:ERROR
-                </button>
-
-
-                <button
-                  onClick={() =>
-                    useQuery(
-                      "service:billing-api"
-                    )
-                  }
-                >
-                  service:billing-api
-                </button>
-
-
-                <button
-                  onClick={() =>
-                    useQuery(
-                      "response_time > 1000"
-                    )
-                  }
-                >
-                  response_time &gt; 1000
-                </button>
-
-
-                <button
-                  onClick={() =>
-                    useQuery(
-                      "level:ERROR AND service:billing-api AND response_time > 1000"
-                    )
-                  }
-                >
-                  Complex query
-                </button>
-
-              </div>
-
-
-              <div className="query-actions">
-
-                <button
-                  className="secondary-button"
-                  onClick={validateQuery}
-                >
-                  Validate Query
-                </button>
-
-
-                {queryValid === true && (
-                  <span className="query-valid">
-                    ✓ Query valid
-                  </span>
-                )}
-
-
-                {queryValid === false && (
-                  <span className="query-invalid">
-                    ✕ Invalid query
-                  </span>
-                )}
-
-              </div>
-
-
-              {error && (
-                <div className="error-message">
-                  {error}
-                </div>
-              )}
-
-            </div>
-
-
-            {/* STATS */}
-
-            <div className="stats-grid">
-
-              <div className="stat-card">
-
-                <div className="stat-top">
-                  <span>
-                    TOTAL LOGS
-                  </span>
-
-                  <span className="stat-icon">
-                    ◉
-                  </span>
-                </div>
-
-                <strong>
-                  {Number(
-                    totalLogs || 0
-                  ).toLocaleString()}
-                </strong>
-
-                <small>
-                  Indexed records
-                </small>
-
-              </div>
-
-
-              <div className="stat-card error-card">
-
-                <div className="stat-top">
-
-                  <span>
-                    ERRORS
-                  </span>
-
-                  <span className="stat-icon">
-                    !
-                  </span>
-
-                </div>
-
-                <strong>
-                  {Number(
-                    errorCount || 0
-                  ).toLocaleString()}
-                </strong>
-
-                <small className="negative">
-                  ERROR logs
-                </small>
-
-              </div>
-
-
-              <div className="stat-card">
-
-                <div className="stat-top">
-
-                  <span>
-                    WARNINGS
-                  </span>
-
-                  <span className="stat-icon">
-                    △
-                  </span>
-
-                </div>
-
-                <strong>
-                  {Number(
-                    warningCount || 0
-                  ).toLocaleString()}
-                </strong>
-
-                <small>
-                  Warning logs
-                </small>
-
-              </div>
-
-
-              <div className="stat-card">
-
-                <div className="stat-top">
-
-                  <span>
-                    AVG RESPONSE
-                  </span>
-
-                  <span className="stat-icon">
-                    ◷
-                  </span>
-
-                </div>
-
-                <strong>
-                  {averageResponse || 0} ms
-                </strong>
-
-                <small>
-                  Average latency
-                </small>
-
-              </div>
-
-            </div>
-
-
-            {/* ANALYTICS */}
-
-            <div className="dashboard-grid">
-
-              <div className="panel large-panel">
-
-                <div className="panel-header">
-
-                  <div>
-
-                    <span className="panel-label">
-                      LOG VOLUME
-                    </span>
-
-                    <h2>
-                      Logs over time
-                    </h2>
-
-                  </div>
-
-                </div>
-
-
-                <div className="chart">
-
-                  <div className="chart-grid">
-
-                    <span>20K</span>
-                    <span>15K</span>
-                    <span>10K</span>
-                    <span>5K</span>
-                    <span>0</span>
-
-                  </div>
-
-
-                  <div className="bars">
-
-                    {[40, 55, 48, 72, 62, 85, 68, 92, 74, 96, 82, 100, 88, 95, 78, 91].map(
-                      (height, index) => (
-
-                        <div
-                          className="bar"
-                          style={{
-                            height:
-                              `${height}%`,
-                          }}
-                          key={index}
-                        ></div>
-
-                      )
-                    )}
-
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              {/* ACTIVE ALERTS */}
-
-              <div className="panel">
-
-                <div className="panel-header">
-
-                  <div>
-
-                    <span className="panel-label">
-                      ALERTING
-                    </span>
-
-                    <h2>
-                      Active rules
-                    </h2>
-
-                  </div>
-
-                </div>
-
-
-                <div className="service-list">
-
-                  {alerts.length === 0 ? (
-
-                    <div className="empty-state">
-                      No alert rules configured.
-                    </div>
-
-                  ) : (
-
-                    alerts.slice(0, 4).map(
-                      (alert, index) => (
-
-                        <div
-                          className="service"
-                          key={
-                            alert.id ||
-                            alert._id ||
-                            index
-                          }
-                        >
-
-                          <div className="service-info">
-
-                            <span className="service-dot healthy"></span>
-
-                            <div>
-
-                              <strong>
-                                {alert.name ||
-                                  `Alert ${index + 1}`}
-                              </strong>
-
-                              <small>
-                                {alert.query ||
-                                  "Query rule"}
-                              </small>
-
-                            </div>
-
-                          </div>
-
-                          <span className="health healthy">
-                            ACTIVE
-                          </span>
-
-                        </div>
-
-                      )
-                    )
-
-                  )}
-
-                </div>
-
-              </div>
-
-            </div>
-
-
-            {/* RECENT LOGS */}
-
-            <div className="panel logs-panel">
-
-              <div className="panel-header">
-
-                <div>
-
-                  <span className="panel-label">
-                    SEARCH RESULTS
-                  </span>
-
-                  <h2>
-                    Recent logs
-                  </h2>
-
-                </div>
-
-
-                <button
-                  className="view-all"
-                  onClick={() =>
-                    setActivePage(
-                      "search"
-                    )
-                  }
-                >
-                  View all logs →
-                </button>
-
-              </div>
-
-
-              {searchMessage && (
-                <div className="search-result-message">
-                  {searchMessage}
-                </div>
-              )}
-
-
-              <div className="log-table">
-
-                <div className="table-head">
-
-                  <span>TIME</span>
-                  <span>LEVEL</span>
-                  <span>SERVICE</span>
-                  <span>MESSAGE</span>
-                  <span>RESPONSE</span>
-
-                </div>
-
-
-                {logs.length === 0 ? (
-
-                  <div className="empty-logs">
-                    Run a search to display
-                    matching logs.
-                  </div>
-
-                ) : (
-
-                  logs.slice(0, 10).map(
-                    (log, index) => {
-
-                      const item =
-                        formatLog(log);
-
-                      return (
-
-                        <div
-                          className="log-row"
-                          key={index}
-                        >
-
-                          <span className="log-time">
-                            {item.time}
-                          </span>
-
-                          <span
-                            className={`level ${item.level.toLowerCase()}`}
-                          >
-                            {item.level}
-                          </span>
-
-                          <span className="service-name">
-                            {item.service}
-                          </span>
-
-                          <span className="message">
-                            {item.message}
-                          </span>
-
-                          <span className="response">
-                            {item.response}
-                            {item.response !== "-" &&
-                              " ms"}
-                          </span>
-
-                        </div>
-
-                      );
-                    }
-                  )
-
-                )}
-
-              </div>
-
-            </div>
-
-
-            {/* ALERT */}
-
-            {alerts.length > 0 && (
-
-              <div className="alert-banner">
-
-                <div className="alert-symbol">
-                  !
-                </div>
-
-                <div>
-
-                  <span>
-                    ALERTING ENGINE
-                  </span>
-
-                  <strong>
-                    {alerts.length} alert rule
-                    {alerts.length !== 1 &&
-                      "s"} configured
-                  </strong>
-
-                  <p>
-                    Your alerting engine is
-                    monitoring the indexed logs.
-                  </p>
-
-                </div>
-
-                <button
-                  onClick={() =>
-                    setActivePage(
-                      "alerts"
-                    )
-                  }
-                >
-                  MANAGE ALERTS →
-                </button>
-
-              </div>
-
-            )}
-
-          </section>
-
-        )}
-
-
-        {/* =====================================================
-            SEARCH PAGE
-        ===================================================== */}
-
-        {activePage === "search" && (
-
-          <section className="content">
-
-            <div className="page-heading">
-
-              <p className="eyebrow">
-                LUCENE SEARCH
-              </p>
-
-              <h1 className="page-title">
-                SEARCH YOUR LOGS.
-              </h1>
-
-              <p className="hero-description">
-                Query indexed application logs
-                using LogStream's search syntax.
-              </p>
-
-            </div>
-
-
-            <div className="search-section">
-
-              <div className="search-box">
-
-                <input
-                  value={query}
-                  onChange={(e) =>
-                    setQuery(
-                      e.target.value
-                    )
-                  }
-                  onKeyDown={(e) => {
-                    if (
-                      e.key === "Enter"
-                    ) {
-                      runSearch();
-                    }
-                  }}
-                  placeholder="Enter Lucene query..."
-                />
-
-                <button
-                  onClick={() =>
-                    runSearch()
-                  }
-                  disabled={loading}
-                >
-                  {loading
-                    ? "SEARCHING..."
-                    : "SEARCH"}
-                </button>
-
-              </div>
-
-
-              <div className="query-actions">
-
-                <button
-                  className="secondary-button"
-                  onClick={
-                    validateQuery
-                  }
-                >
-                  Validate
-                </button>
-
-                {queryValid === true && (
-                  <span className="query-valid">
-                    ✓ Valid query
-                  </span>
-                )}
-
-                {queryValid === false && (
-                  <span className="query-invalid">
-                    ✕ Invalid query
-                  </span>
-                )}
-
-              </div>
-
-            </div>
-
-
-            <div className="panel logs-panel">
-
-              <div className="panel-header">
-
-                <div>
-
-                  <span className="panel-label">
-                    RESULTS
-                  </span>
-
-                  <h2>
-                    {logs.length} logs
-                  </h2>
-
-                </div>
-
-              </div>
-
-
-              <div className="log-table">
-
-                <div className="table-head">
-
-                  <span>TIME</span>
-                  <span>LEVEL</span>
-                  <span>SERVICE</span>
-                  <span>MESSAGE</span>
-                  <span>RESPONSE</span>
-
-                </div>
-
-
-                {logs.map(
-                  (log, index) => {
-
-                    const item =
-                      formatLog(log);
-
-                    return (
-
-                      <div
-                        className="log-row"
-                        key={index}
-                      >
-
-                        <span className="log-time">
-                          {item.time}
-                        </span>
-
-                        <span
-                          className={`level ${item.level.toLowerCase()}`}
-                        >
-                          {item.level}
-                        </span>
-
-                        <span className="service-name">
-                          {item.service}
-                        </span>
-
-                        <span className="message">
-                          {item.message}
-                        </span>
-
-                        <span className="response">
-                          {item.response}
-                        </span>
-
-                      </div>
-
-                    );
-
-                  }
-                )}
-
-              </div>
-
-            </div>
-
-          </section>
-
-        )}
-
-
-        {/* =====================================================
-            ALERTS PAGE
-        ===================================================== */}
-
-        {activePage === "alerts" && (
-
-          <section className="content">
-
-            <div className="page-heading">
-
-              <p className="eyebrow">
-                ALERTING ENGINE
-              </p>
-
-              <h1 className="page-title">
-                NEVER MISS AN INCIDENT.
-              </h1>
-
-              <p className="hero-description">
-                Create rules that continuously
-                monitor your application logs.
-              </p>
-
-            </div>
-
-
-            <div className="alerts-layout">
-
-              {/* EXISTING RULES */}
-
-              <div>
-
-                <div className="section-title">
-                  <span>RULES</span>
-                </div>
-
-
-                {alerts.length === 0 ? (
-
-                  <div className="panel empty-state">
-                    No alert rules yet.
-                  </div>
-
-                ) : (
-
-                  alerts.map(
-                    (alert, index) => {
-
-                      const id =
-                        alert.id ||
-                        alert._id;
-
-                      return (
-
-                        <div
-                          className="alert-card"
-                          key={
-                            id || index
-                          }
-                        >
-
-                          <div className="alert-card-header">
-
-                            <div>
-
-                              <h3>
-                                {alert.name ||
-                                  `Alert ${index + 1}`}
-                              </h3>
-
-                              <span className="alert-status">
-                                ACTIVE
-                              </span>
-
-                            </div>
-
-                          </div>
-
-
-                          <div className="alert-query">
-
-                            {alert.query ||
-                              "No query"}
-
-                          </div>
-
-
-                          <div className="alert-details">
-
-                            Fires above{" "}
-                            <strong>
-                              {alert.threshold ??
-                                alert.firesAbove ??
-                                0}
-                            </strong>
-
-                            {" "}in{" "}
-
-                            <strong>
-                              {alert.window ??
-                                alert.windowMinutes ??
-                                5}
-                            </strong>
-
-                            {" "}minutes
-
-                          </div>
-
-
-                          <div className="alert-buttons">
-
-                            <button
-                              className="secondary-button"
-                              onClick={() =>
-                                handleEvaluateAlert(
-                                  id
-                                )
-                              }
-                              disabled={
-                                alertLoading
-                              }
-                            >
-                              Check now
-                            </button>
-
-
-                            <button
-                              className="secondary-button"
-                              onClick={() => {
-                                setQuery(
-                                  alert.query ||
-                                    ""
-                                );
-
-                                setActivePage(
-                                  "search"
-                                );
-
-                                runSearch(
-                                  alert.query ||
-                                    ""
-                                );
-                              }}
-                            >
-                              View matching logs
-                            </button>
-
-
-                            <button
-                              className="delete-button"
-                              onClick={() =>
-                                handleDeleteAlert(
-                                  id
-                                )
-                              }
-                              disabled={
-                                alertLoading
-                              }
-                            >
-                              Delete
-                            </button>
-
-                          </div>
-
-                        </div>
-
-                      );
-
-                    }
-                  )
-
-                )}
-
-              </div>
-
-
-              {/* CREATE RULE */}
-
-              <div>
-
-                <div className="section-title">
-                  <span>NEW RULE</span>
-                </div>
-
-
-                <form
-                  className="panel alert-form"
-                  onSubmit={
-                    handleCreateAlert
-                  }
-                >
-
-                  <label>
-                    Name
-
-                    <input
-                      value={
-                        alertForm.name
-                      }
-                      onChange={(e) =>
-                        setAlertForm({
-                          ...alertForm,
-                          name:
-                            e.target.value,
-                        })
-                      }
-                      placeholder="Checkout 500s"
-                    />
-
-                  </label>
-
-
-                  <label>
-                    Query
-
-                    <input
-                      value={
-                        alertForm.query
-                      }
-                      onChange={(e) =>
-                        setAlertForm({
-                          ...alertForm,
-                          query:
-                            e.target.value,
-                        })
-                      }
-                    />
-
-                  </label>
-
-
-                  <div className="form-row">
-
-                    <label>
-                      Fires above
-
-                      <input
-                        type="number"
-                        value={
-                          alertForm.threshold
-                        }
-                        onChange={(e) =>
-                          setAlertForm({
-                            ...alertForm,
-                            threshold:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </label>
-
-
-                    <label>
-                      Window (minutes)
-
-                      <input
-                        type="number"
-                        value={
-                          alertForm.window
-                        }
-                        onChange={(e) =>
-                          setAlertForm({
-                            ...alertForm,
-                            window:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </label>
-
-                  </div>
-
-
-                  <label>
-                    Webhook URL (optional)
-
-                    <input
-                      value={
-                        alertForm.webhookUrl
-                      }
-                      onChange={(e) =>
-                        setAlertForm({
-                          ...alertForm,
-                          webhookUrl:
-                            e.target.value,
-                        })
-                      }
-                      placeholder="https://hooks.slack.com/..."
-                    />
-
-                  </label>
-
-
-                  <button
-                    className="create-button"
-                    type="submit"
-                    disabled={
-                      alertLoading
-                    }
-                  >
-                    {alertLoading
-                      ? "CREATING..."
-                      : "CREATE RULE"}
-                  </button>
-
-                </form>
-
-              </div>
-
-            </div>
-
-          </section>
-
-        )}
-
-
-        {/* =====================================================
-            SERVICES PAGE
-        ===================================================== */}
-
-        {activePage === "services" && (
-
-          <section className="content">
-
-            <div className="page-heading">
-
-              <p className="eyebrow">
-                MICROSERVICES
-              </p>
-
-              <h1 className="page-title">
-                SERVICE HEALTH.
-              </h1>
-
-              <p className="hero-description">
-                Monitor application activity
-                across your distributed services.
-              </p>
-
-            </div>
-
-
-            <div className="stats-grid">
-
-              <div className="stat-card">
-                <span className="panel-label">
-                  TOTAL LOGS
-                </span>
-
-                <strong>
-                  {Number(
-                    totalLogs || 0
-                  ).toLocaleString()}
-                </strong>
-              </div>
-
-
-              <div className="stat-card error-card">
-                <span className="panel-label">
-                  ERRORS
-                </span>
-
-                <strong>
-                  {Number(
-                    errorCount || 0
-                  ).toLocaleString()}
-                </strong>
-              </div>
-
-
-              <div className="stat-card">
-                <span className="panel-label">
-                  WARNINGS
-                </span>
-
-                <strong>
-                  {Number(
-                    warningCount || 0
-                  ).toLocaleString()}
-                </strong>
-              </div>
-
-            </div>
-
-
-            <div className="panel">
-
-              <div className="panel-header">
-
-                <div>
-
-                  <span className="panel-label">
-                    DISTRIBUTED SYSTEM
-                  </span>
-
-                  <h2>
-                    Service activity
-                  </h2>
-
-                </div>
-
-              </div>
-
-
-              <div className="service-list">
-
-                {[
-                  "billing-api",
-                  "payment-api",
-                  "auth-service",
-                  "user-service",
-                  "order-service",
-                ].map(
-                  (service) => (
-
-                    <div
-                      className="service"
-                      key={service}
-                    >
-
-                      <div className="service-info">
-
-                        <span className="service-dot healthy"></span>
-
-                        <div>
-
-                          <strong>
-                            {service}
-                          </strong>
-
-                          <small>
-                            Connected to
-                            LogStream
-                          </small>
-
-                        </div>
-
-                      </div>
-
-
-                      <span className="health healthy">
-                        MONITORED
-                      </span>
-
-                    </div>
-
-                  )
-                )}
-
-              </div>
-
-            </div>
-
-          </section>
-
-        )}
-
-
-        {/* =====================================================
-            ANALYTICS PAGE
-        ===================================================== */}
-
-        {activePage === "analytics" && (
-
-          <section className="content">
-
-            <div className="page-heading">
-
-              <p className="eyebrow">
-                LOG ANALYTICS
-              </p>
-
-              <h1 className="page-title">
-                FIND THE SIGNAL.
-              </h1>
-
-              <p className="hero-description">
-                Analyze the behavior of your
-                distributed applications.
-              </p>
-
-            </div>
-
-
-            <div className="stats-grid">
-
-              <div className="stat-card">
-
-                <span className="panel-label">
-                  INDEXED LOGS
-                </span>
-
-                <strong>
-                  {Number(
-                    totalLogs || 0
-                  ).toLocaleString()}
-                </strong>
-
-              </div>
-
-
-              <div className="stat-card error-card">
-
-                <span className="panel-label">
-                  ERROR LOGS
-                </span>
-
-                <strong>
-                  {Number(
-                    errorCount || 0
-                  ).toLocaleString()}
-                </strong>
-
-              </div>
-
-
-              <div className="stat-card">
-
-                <span className="panel-label">
-                  WARNINGS
-                </span>
-
-                <strong>
-                  {Number(
-                    warningCount || 0
-                  ).toLocaleString()}
-                </strong>
-
-              </div>
-
-
-              <div className="stat-card">
-
-                <span className="panel-label">
-                  THROUGHPUT
-                </span>
-
-                <strong>
-                  {Number(
-                    ingestionRate || 0
-                  ).toLocaleString()}
-                </strong>
-
-                <small>
-                  logs/sec
-                </small>
-
-              </div>
-
-            </div>
-
-
-            <div className="dashboard-grid">
-
-              <div className="panel large-panel">
-
-                <div className="panel-header">
-
-                  <div>
-
-                    <span className="panel-label">
-                      TIME SERIES
-                    </span>
-
-                    <h2>
-                      Log volume
-                    </h2>
-
-                  </div>
-
-                </div>
-
-
-                <div className="chart">
-
-                  <div className="chart-grid">
-
-                    <span>20K</span>
-                    <span>15K</span>
-                    <span>10K</span>
-                    <span>5K</span>
-                    <span>0</span>
-
-                  </div>
-
-
-                  <div className="bars">
-
-                    {[35, 45, 50, 42, 70, 62, 80, 72, 91, 84, 96, 88, 100, 82, 94, 90].map(
-                      (height, index) => (
-
-                        <div
-                          className="bar"
-                          style={{
-                            height:
-                              `${height}%`,
-                          }}
-                          key={index}
-                        ></div>
-
-                      )
-                    )}
-
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              <div className="panel">
-
-                <div className="panel-header">
-
-                  <div>
-
-                    <span className="panel-label">
-                      ALERTS
-                    </span>
-
-                    <h2>
-                      Monitoring
-                    </h2>
-
-                  </div>
-
-                </div>
-
-
-                <div className="analytics-alert">
-
-                  <strong>
-                    {alerts.length}
-                  </strong>
-
-                  <span>
-                    active alert rules
-                  </span>
-
-                </div>
-
-
-                <button
-                  className="create-button"
-                  onClick={() =>
-                    setActivePage(
-                      "alerts"
-                    )
-                  }
-                >
-                  MANAGE ALERTS
-                </button>
-
-              </div>
-
-            </div>
-
-          </section>
-
-        )}
-
-
-        {/* FOOTER */}
+        <div className="content">
+          {renderPage()}
+        </div>
 
         <footer>
-
           <span>
-            LOGSTREAM
+            LOGSTREAM · DISTRIBUTED LOG ANALYTICS
           </span>
 
           <span>
-            Distributed Log Analytics &
-            Alerting Platform
+            ● SYSTEM OPERATIONAL
           </span>
-
-          <span>
-            ● Backend Connected
-          </span>
-
         </footer>
-
       </main>
-
     </div>
   );
 }
-
 
 export default App;
