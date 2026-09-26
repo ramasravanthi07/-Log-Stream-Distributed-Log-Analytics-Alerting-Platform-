@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+
 import "./styles.css";
 
 import {
@@ -131,12 +132,19 @@ function App() {
   };
 
   // =========================================================
-  // INITIAL LOAD
+  // INITIAL LOAD + AUTO REFRESH
   // =========================================================
 
   useEffect(() => {
     loadStats();
     loadAlerts();
+
+    const refreshInterval = setInterval(() => {
+      loadStats();
+      loadAlerts();
+    }, 30000);
+
+    return () => clearInterval(refreshInterval);
   }, []);
 
   // =========================================================
@@ -177,8 +185,10 @@ function App() {
       console.error(err);
 
       setLogs([]);
+
       setError(
-        err?.message || "Search failed. Please check the backend."
+        err?.message ||
+          "Search failed. Please check the backend."
       );
     } finally {
       setLoading(false);
@@ -1246,15 +1256,18 @@ function App() {
   const renderAnalytics = () => {
     const errorRate =
       totalLogs > 0
-        ? ((Number(errorCount) / Number(totalLogs)) *
+        ? (
+            (Number(errorCount) /
+              Number(totalLogs)) *
             100
           ).toFixed(2)
         : "0.00";
 
     const warningRate =
       totalLogs > 0
-        ? ((Number(warningCount) /
-            Number(totalLogs)) *
+        ? (
+            (Number(warningCount) /
+              Number(totalLogs)) *
             100
           ).toFixed(2)
         : "0.00";
@@ -1454,7 +1467,9 @@ function App() {
         <header className="topbar">
           <div className="breadcrumb">
             LOGSTREAM
+
             <span>/</span>
+
             {navigation.find(
               (item) =>
                 item.id === activePage
@@ -1462,6 +1477,11 @@ function App() {
           </div>
 
           <div className="topbar-right">
+            <span className="live-status">
+              <span className="live-dot">●</span>
+              LIVE
+            </span>
+
             <button
               className="icon-button"
               onClick={() => {
